@@ -97,6 +97,8 @@ summary::-webkit-details-marker{display:none}
 details p{color:var(--mute);margin-top:10px;font-size:15px}
 footer .wrap{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;color:var(--mute);font-size:14px;border-top:1px solid var(--line);padding-top:24px}
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+/* fond noir */
+:root,:root[data-theme=light],:root[data-theme=dark]{color-scheme:dark;--bg:#000;--card:#141418;--soft:#1f1f27;--glass:rgba(0,0,0,.72)}
 </style>
 </head>
 <body>
@@ -172,7 +174,7 @@ footer .wrap{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;
   <h2>Questions fréquentes</h2>
   <div class="qs">
     <details><summary>C'est quoi exactement, Kaptaa ?</summary><p>Une app qui lit tes captures d'écran avec l'IA, les range par type (recette, produit, lieu, événement…) et en tire ta liste de choses à faire, avec les dates à ne pas rater.</p></details>
-    <details><summary>Comment marchent les 100 places gratuites ?</summary><p>Les 100 premières préinscriptions reçoivent Kaptaa Pro gratuitement au lancement. Le compteur en haut de page se met à jour à chaque inscription.</p></details>
+    <details><summary>Comment marchent les 100 places gratuites ?</summary><p>Les 100 premières préinscriptions reçoivent Kaptaa Pro gratuitement au lancement. Le compteur en haut de page se met à jour à chaque inscription, et tu reçois un e-mail de confirmation.</p></details>
     <details><summary>Je dois donner ma carte bancaire ?</summary><p>Non. La préinscription demande juste ton prénom et ton e-mail.</p></details>
     <details><summary>iPhone ou Android ?</summary><p>Les deux. Indique ton téléphone dans le formulaire pour être prévenu au bon moment.</p></details>
     <details><summary>Et mes captures, elles vont où ?</summary><p>Elles servent uniquement à les analyser et à te les ranger. Tu peux supprimer une capture à tout moment depuis sa fiche.</p></details>
@@ -184,18 +186,18 @@ footer .wrap{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;
 <script>
 {
 /* ===== RÉGLAGES =====
-   ENDPOINT : URL du Google Apps Script (voir apps-script.gs). Vide = mode aperçu, rien n'est enregistré. */
-const CONFIG = { ENDPOINT: "", TOTAL: 100 };
+   Chaque inscription est envoyée par e-mail à cette adresse (service FormSubmit). */
+const CONFIG = { EMAIL: "cennolight@gmail.com", API: "https://kaptaa-api.onrender.com", TOTAL: 100 };
 const $ = id => document.getElementById(id);
 
 /* thème clair/sombre transmis à l'app dans le téléphone */
 const frame = $('app');
-const syncTheme = () => { try { const t = document.documentElement.getAttribute('data-theme'); const r = frame.contentDocument.documentElement; t ? r.setAttribute('data-theme', t) : r.removeAttribute('data-theme'); } catch (e) {} };
+const syncTheme = () => { try { const t = 'dark'; const r = frame.contentDocument.documentElement; t ? r.setAttribute('data-theme', t) : r.removeAttribute('data-theme'); } catch (e) {} };
 frame.addEventListener('load', syncTheme);
 new MutationObserver(syncTheme).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 addEventListener('message', e => { if (e.data === 'kaptaa:signup') { $('offre').scrollIntoView({ behavior: 'smooth' }); setTimeout(() => $('name').focus({ preventScroll: true }), 600); } });
 
-/* compteur */
+/* compteur en direct */
 let count = 0;
 const paint = () => {
   const taken = Math.min(CONFIG.TOTAL, count);
@@ -203,10 +205,12 @@ const paint = () => {
   $('pct').textContent = taken + '/' + CONFIG.TOTAL;
   $('arc').style.strokeDashoffset = 238.76 * (1 - taken / CONFIG.TOTAL);
 };
-(async () => {
-  if (CONFIG.ENDPOINT) { try { const j = await (await fetch(CONFIG.ENDPOINT)).json(); count = +j.count || 0; } catch (e) {} }
-  paint();
-})();
+const api = (path, opt = {}, ms = 45000) => {
+  const c = new AbortController(); const t = setTimeout(() => c.abort(), ms);
+  return fetch(CONFIG.API + path, { ...opt, signal: c.signal }).then(r => r.json()).finally(() => clearTimeout(t));
+};
+const refresh = () => api('/api/count').then(j => { count = +j.count || 0; paint(); }).catch(() => {});
+refresh(); setInterval(refresh, 30000);
 
 /* formulaire */
 try { $('link').value = location.href.split('#')[0]; } catch (e) {}
@@ -217,20 +221,35 @@ $('form').addEventListener('submit', async e => {
   if (!name) return fail('Ajoute ton prénom.');
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return fail('Cet e-mail ne semble pas valide.');
   if (!$('ok').checked) return fail('Coche la case pour être prévenu au lancement.');
-  fail(''); const b = $('send'); b.disabled = true; b.textContent = 'Envoi…';
-  const data = { name, email, os: $('os').value, use: $('use').value, at: new Date().toISOString() };
+  fail(''); const b = $('send'); b.disabled = true; b.textContent = 'Réservation de ta place…';
+  const os = $('os').value === 'android' ? 'Android' : 'iPhone';
   let rank = null;
-  if (CONFIG.ENDPOINT) {
-    try {
-      const j = await (await fetch(CONFIG.ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(data) })).json();
-      rank = +j.rank || null; if (j.count) count = +j.count;
-    } catch (err) { b.disabled = false; b.textContent = 'Je réserve ma place gratuite'; return fail("L'envoi n'a pas marché. Réessaie dans un instant."); }
+  try {
+    const j = await api('/api/signup', { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ name, email, os, use: $('use').value }) });
+    rank = +j.rank || null; if (j.count) { count = +j.count; paint(); }
+  } catch (e) {}
+  const free = rank && rank <= CONFIG.TOTAL;
+  const payload = {
+    _subject: 'Kaptaa — préinscription' + (rank ? ' n° ' + rank + (free ? ' (gratuit)' : ' (liste d\'attente)') : '') + ' : ' + name,
+    _template: 'table',
+    _captcha: 'false',
+    _autoresponse: 'Salut ' + name + ', ta préinscription à Kaptaa est bien enregistrée' + (rank ? ' (n° ' + rank + ')' : '') + '. ' + (free ? 'Tu fais partie des 100 premiers : Kaptaa sera gratuit pour toi au lancement.' : rank ? 'Les 100 places gratuites sont parties, mais tu es sur la liste : on te prévient au lancement.' : 'Les 100 premiers inscrits ont Kaptaa gratuit au lancement : on te recontacte très vite.') + ' — L\'équipe Kaptaa',
+    Rang: rank ? rank + ' / ' + CONFIG.TOTAL : 'inconnu',
+    Prénom: name, email, Téléphone: os, Usage: $('use').value,
+    Date: new Date().toLocaleString('fr-FR')
+  };
+  try {
+    const r = await fetch('https://formsubmit.co/ajax/' + CONFIG.EMAIL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' }, body: JSON.stringify(payload) });
+    const j = await r.json();
+    if (!r.ok || String(j.success) !== 'true') throw new Error(j.message || 'send');
+  } catch (err) {
+    b.disabled = false; b.textContent = 'Je réserve ma place gratuite';
+    return fail("L'envoi n'a pas marché. Réessaie dans un instant.");
   }
-  paint();
   $('tn').textContent = name;
-  if (!CONFIG.ENDPOINT) { $('tmsg').textContent = "Mode aperçu : aucune inscription n'est enregistrée tant que la page n'est pas reliée au Google Sheet."; }
-  else if (rank && rank <= CONFIG.TOTAL) { $('tmsg').textContent = 'Ta place gratuite est réservée. On t’écrit au lancement.'; $('rank').textContent = 'n° ' + rank + ' / ' + CONFIG.TOTAL; }
-  else { $('tmsg').textContent = 'Les 100 places gratuites sont parties, mais tu es sur la liste : on te prévient au lancement.'; $('rank').textContent = rank ? 'n° ' + rank : ''; }
+  if (free) { $('tmsg').textContent = 'Ta place gratuite est réservée. Tu vas recevoir un e-mail de confirmation.'; $('rank').textContent = 'n° ' + rank + ' / ' + CONFIG.TOTAL; }
+  else if (rank) { $('tmsg').textContent = 'Les 100 places gratuites sont parties, mais tu es sur la liste : on te prévient au lancement.'; $('rank').textContent = 'n° ' + rank; }
+  else { $('tmsg').textContent = 'Ton inscription est enregistrée. Tu vas recevoir un e-mail de confirmation.'; $('rank').textContent = 'Inscrit ✓'; }
   $('fieldsWrap').hidden = true; $('thanks').hidden = false;
 });
 $('copy').addEventListener('click', async () => {
