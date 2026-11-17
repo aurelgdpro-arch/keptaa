@@ -223,26 +223,29 @@ $('form').addEventListener('submit', async e => {
   if (!$('ok').checked) return fail('Coche la case pour être prévenu au lancement.');
   fail(''); const b = $('send'); b.disabled = true; b.textContent = 'Réservation de ta place…';
   const os = $('os').value === 'android' ? 'Android' : 'iPhone';
+  const withTimeout = (p, ms) => Promise.race([p, new Promise((_, ko) => setTimeout(() => ko(new Error('timeout')), ms))]);
+  /* 1. place réservée dans le compteur */
   let rank = null;
   try {
-    const j = await api('/api/signup', { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ name, email, os, use: $('use').value }) });
+    const j = await withTimeout(api('/api/signup', { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ name, email, os, use: $('use').value }) }, 25000), 26000);
     rank = +j.rank || null; if (j.count) { count = +j.count; paint(); }
-  } catch (e) {}
+  } catch (e) { console.warn('compteur', e); }
   const free = rank && rank <= CONFIG.TOTAL;
-  const payload = {
-    _subject: 'Kaptaa — préinscription' + (rank ? ' n° ' + rank + (free ? ' (gratuit)' : ' (liste d\'attente)') : '') + ' : ' + name,
-    _template: 'table',
-    _captcha: 'false',
-    _autoresponse: 'Salut ' + name + ', ta préinscription à Kaptaa est bien enregistrée' + (rank ? ' (n° ' + rank + ')' : '') + '. ' + (free ? 'Tu fais partie des 100 premiers : Kaptaa sera gratuit pour toi au lancement.' : rank ? 'Les 100 places gratuites sont parties, mais tu es sur la liste : on te prévient au lancement.' : 'Les 100 premiers inscrits ont Kaptaa gratuit au lancement : on te recontacte très vite.') + ' — L\'équipe Kaptaa',
-    Rang: rank ? rank + ' / ' + CONFIG.TOTAL : 'inconnu',
-    Prénom: name, email, Téléphone: os, Usage: $('use').value,
-    Date: new Date().toLocaleString('fr-FR')
+  /* 2. e-mail (n'empêche jamais la confirmation) */
+  const fd = new FormData();
+  const fields = {
+    _subject: 'Kaptaa — préinscription' + (rank ? ' n° ' + rank + (free ? ' (gratuit)' : " (liste d'attente)") : '') + ' : ' + name,
+    _template: 'table', _captcha: 'false',
+    _autoresponse: 'Salut ' + name + ', ta préinscription à Kaptaa est bien enregistrée' + (rank ? ' (n° ' + rank + ')' : '') + '. ' + (free ? 'Tu fais partie des 100 premiers : Kaptaa sera gratuit pour toi au lancement.' : rank ? 'Les 100 places gratuites sont parties, mais tu es sur la liste : on te prévient au lancement.' : 'Les 100 premiers inscrits ont Kaptaa gratuit au lancement : on te recontacte très vite.') + " — L'équipe Kaptaa",
+    Rang: rank ? rank + ' / ' + CONFIG.TOTAL : 'inconnu', Prénom: name, email, Téléphone: os, Usage: $('use').value, Date: new Date().toLocaleString('fr-FR')
   };
+  Object.entries(fields).forEach(([k, v]) => fd.append(k, v));
+  let mailed = false;
   try {
-    const r = await fetch('https://formsubmit.co/ajax/' + CONFIG.EMAIL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' }, body: JSON.stringify(payload) });
-    const j = await r.json();
-    if (!r.ok || String(j.success) !== 'true') throw new Error(j.message || 'send');
-  } catch (err) {
+    const r = await withTimeout(fetch('https://formsubmit.co/ajax/' + CONFIG.EMAIL, { method: 'POST', headers: { 'Accept': 'application/json' }, body: fd }), 10000);
+    mailed = r.ok;
+  } catch (e) { console.warn('e-mail', e); }
+  if (!rank && !mailed) {
     b.disabled = false; b.textContent = 'Je réserve ma place gratuite';
     return fail("L'envoi n'a pas marché. Réessaie dans un instant.");
   }
